@@ -162,7 +162,7 @@ export function BedGrid({ onBedClick, onPurifyClick }: BedGridProps) {
                 )}
               </div>
 
-              {!isEmpty && (
+              {bed.elementResidues.length > 0 && (
                 <div className="flex items-center gap-1 mb-1.5 flex-wrap">
                   <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${POLLUTION_LEVEL_COLORS[bed.pollutionLevel]}`}>
                     <Droplets className="w-2.5 h-2.5 inline mr-0.5" />
@@ -180,12 +180,25 @@ export function BedGrid({ onBedClick, onPurifyClick }: BedGridProps) {
               )}
 
               {isEmpty ? (
-                <div className="flex flex-col items-center justify-center py-6 text-gray-400">
-                  <div className="w-12 h-12 rounded-full bg-white/60 flex items-center justify-center mb-1">
-                    <BedDouble className="w-6 h-6" />
+                <div>
+                  <div className="flex flex-col items-center justify-center py-4 text-gray-400">
+                    <div className="w-12 h-12 rounded-full bg-white/60 flex items-center justify-center mb-1">
+                      <BedDouble className="w-6 h-6" />
+                    </div>
+                    <p className="text-xs">空闲床位</p>
+                    <p className="text-[10px] opacity-70 mt-1">{swapMode ? "点击交换" : "点击分配灵兽"}</p>
                   </div>
-                  <p className="text-xs">空闲床位</p>
-                  <p className="text-[10px] opacity-70 mt-1">{swapMode ? "点击交换" : "点击分配灵兽"}</p>
+                  {bed.elementResidues.length > 0 && !swapMode && (
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setPurifyBedId(bed.id); setSelectedPurifyHerbs([]); }}
+                        className="flex-1 flex items-center justify-center gap-1 py-1 rounded-lg text-[10px] font-medium bg-cyan-50 text-cyan-700 border border-cyan-200 hover:bg-cyan-100 hover:border-cyan-400 transition-all"
+                      >
+                        <Droplets className="w-3 h-3" />
+                        净化残留
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : snapshot && breed ? (
                 <div>

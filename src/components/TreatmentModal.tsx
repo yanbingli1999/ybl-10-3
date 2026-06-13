@@ -28,20 +28,14 @@ function AdjacencyHint({ beastElement, targetBedId }: { beastElement: Element; t
   const adjIds = BED_ADJACENCY[targetBedId] ?? [];
   const adjBeds = adjIds.map(id => beds.find(b => b.id === id)).filter(Boolean) as typeof beds;
 
-  const hints: { type: "generate" | "overcome" | "neutral"; element: Element; bedName: string }[] = [];
+  const hints: { incoming: "generate" | "overcome" | "neutral"; outgoing: "generate" | "overcome" | "neutral"; adjElement: Element; bedName: string }[] = [];
   for (const b of adjBeds) {
     if (b.status !== "occupied" || !b.beastSnapshot) continue;
     const br = BREEDS.find(x => x.id === b.beastSnapshot!.breedId);
     if (!br) continue;
-    const rel = getElementRelation(beastElement, br.element);
-    const reverseRel = getElementRelation(br.element, beastElement);
-    if (rel === "generate" || reverseRel === "generate") {
-      hints.push({ type: "generate", element: br.element, bedName: b.name });
-    } else if (rel === "overcome" || reverseRel === "overcome") {
-      hints.push({ type: "overcome", element: br.element, bedName: b.name });
-    } else {
-      hints.push({ type: "neutral", element: br.element, bedName: b.name });
-    }
+    const incoming = getElementRelation(br.element, beastElement);
+    const outgoing = getElementRelation(beastElement, br.element);
+    hints.push({ incoming, outgoing, adjElement: br.element, bedName: b.name });
   }
 
   if (hints.length === 0) {
@@ -53,32 +47,46 @@ function AdjacencyHint({ beastElement, targetBedId }: { beastElement: Element; t
     );
   }
 
-  const hasOvercome = hints.some(h => h.type === "overcome");
-  const hasGenerate = hints.some(h => h.type === "generate");
+  const hasIncomingOvercome = hints.some(h => h.incoming === "overcome");
+  const hasIncomingGenerate = hints.some(h => h.incoming === "generate");
+  const hasOutgoingGenerate = hints.some(h => h.outgoing === "generate");
+
+  const worst = hasIncomingOvercome ? "bad" : hasIncomingGenerate ? "good" : hasOutgoingGenerate ? "caution" : "neutral";
 
   return (
     <div className={`flex items-start gap-2 p-2 rounded-lg border text-[11px] ${
-      hasOvercome ? "bg-red-50 border-red-200 text-red-700"
-        : hasGenerate ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+      worst === "bad" ? "bg-red-50 border-red-200 text-red-700"
+        : worst === "good" ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+        : worst === "caution" ? "bg-amber-50 border-amber-200 text-amber-700"
         : "bg-gray-50 border-gray-200 text-gray-600"
     }`}>
       <Sparkles className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
       <div className="flex-1 min-w-0">
         <span className="font-semibold">相邻元素提示：</span>
         <div className="flex flex-wrap gap-1 mt-1">
-          {hints.map((h, i) => (
-            <span key={i} className={`px-1.5 py-0.5 rounded border ${
-              h.type === "generate" ? "bg-emerald-100 border-emerald-300 text-emerald-700"
-                : h.type === "overcome" ? "bg-red-100 border-red-300 text-red-700"
-                : "bg-white border-gray-300 text-gray-600"
-            }`}>
-              {h.bedName} {ELEMENT_EMOJI[h.element]}
-              {h.type === "generate" ? "相生↑" : h.type === "overcome" ? "相克↓" : "无影响"}
-            </span>
-          ))}
+          {hints.map((h, i) => {
+            const parts: string[] = [];
+            if (h.incoming === "generate") parts.push("受生↑");
+            if (h.incoming === "overcome") parts.push("被克↓");
+            if (h.outgoing === "generate") parts.push("生彼↑");
+            if (h.outgoing === "overcome") parts.push("克彼↓");
+            const label = parts.length > 0 ? parts.join(" ") : "无影响";
+            const hasBad = h.incoming === "overcome" || h.outgoing === "generate";
+            const hasGood = h.incoming === "generate" || h.outgoing === "overcome";
+            const color = hasBad && !hasGood ? "bg-red-100 border-red-300 text-red-700"
+              : hasGood && !hasBad ? "bg-emerald-100 border-emerald-300 text-emerald-700"
+              : hasBad ? "bg-amber-100 border-amber-300 text-amber-700"
+              : "bg-white border-gray-300 text-gray-600";
+            return (
+              <span key={i} className={`px-1.5 py-0.5 rounded border ${color}`}>
+                {h.bedName} {ELEMENT_EMOJI[h.adjElement]} {label}
+              </span>
+            );
+          })}
         </div>
-        {hasOvercome && <p className="mt-1 text-[10px]">⚠️ 存在相克元素相邻，将加重污染干扰！建议调整床位或隔离。</p>}
-        {hasGenerate && !hasOvercome && <p className="mt-1 text-[10px]">✨ 存在相生元素相邻，有助于治疗！</p>}
+        {hasIncomingOvercome && <p className="mt-1 text-[10px]">⚠️ 存在被克关系，邻居元素克制本灵兽，将加重干扰！建议调整床位或隔离。</p>}
+        {hasIncomingGenerate && !hasIncomingOvercome && <p className="mt-1 text-[10px]">✨ 邻居生本灵兽，相生增益，治疗成功率+3%/残留。</p>}
+        {hasOutgoingGenerate && !hasIncomingOvercome && !hasIncomingGenerate && <p className="mt-1 text-[10px]">⚠️ 本灵兽生邻居，会向邻居散发更多残留，注意邻居受影响。</p>}
       </div>
     </div>
   );

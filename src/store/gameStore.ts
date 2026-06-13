@@ -883,11 +883,26 @@ export const useGameStore = create<GameState>()(
     }),
     {
       name: "beast-clinic-save",
-      version: 1,
+      version: 2,
+      migrate: (persisted, version) => {
+        const saved = persisted as Record<string, unknown>;
+        if (version < 2 && Array.isArray(saved.beds)) {
+          saved.beds = (saved.beds as Record<string, unknown>[]).map(b => ({
+            pollutionLevel: b.pollutionLevel ?? "clean",
+            pollutionValue: b.pollutionValue ?? 0,
+            elementResidues: Array.isArray(b.elementResidues) ? b.elementResidues : [],
+            isolated: b.isolated ?? false,
+            ...b,
+          }));
+        }
+        if (version < 2) {
+          saved.selectedBedForSwapId = saved.selectedBedForSwapId ?? null;
+        }
+        return saved;
+      },
       merge: (persisted, current) => ({ ...current, ...(persisted as object) }),
       onRehydrateStorage: () => (state) => {
         if (state && state.waitingQueue.length === 0 && state.medicalRecords.length === 0) {
-          // 全新存档
           setTimeout(() => state._spawnInitialBeasts(), 100);
         }
       },
