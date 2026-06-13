@@ -1,12 +1,15 @@
 import { useMemo, useState, useEffect } from "react";
-import { X, Stethoscope, Pill, Users, ArrowRight, AlertCircle, Sparkles, Brain, ChevronDown } from "lucide-react";
+import { X, Stethoscope, Pill, Users, ArrowRight, AlertCircle, Sparkles, Brain, ChevronDown, Shield, Droplets } from "lucide-react";
 import { useGameStore, guessDiseaseFromSymptoms } from "@/store/gameStore";
 import {
   BREEDS, HERBS, PRESCRIPTIONS,
   SEVERITY_NAMES, SEVERITY_COLORS, DISEASE_NAMES,
   ELEMENT_EMOJI, ELEMENT_NAMES,
+  POLLUTION_LEVEL_NAMES, POLLUTION_LEVEL_COLORS,
+  getElementRelation,
+  BED_ADJACENCY,
 } from "@/data/gameData";
-import type { Bed, DiseaseType } from "@/types/game";
+import type { Bed, DiseaseType, Element } from "@/types/game";
 
 interface TreatmentModalProps {
   open: boolean;
@@ -14,12 +17,71 @@ interface TreatmentModalProps {
   targetBed: Bed | null;
 }
 
-const SEVERITY_ORDER = ["mild", "moderate", "severe", "critical"];
-
 function getMatchLabel(rate: number): { text: string; color: string } {
   if (rate >= 80) return { text: "高度疑似", color: "text-emerald-600 bg-emerald-50 border-emerald-200" };
   if (rate >= 50) return { text: "中度疑似", color: "text-amber-600 bg-amber-50 border-amber-200" };
   return { text: "不排除", color: "text-gray-500 bg-gray-50 border-gray-200" };
+}
+
+function AdjacencyHint({ beastElement, targetBedId }: { beastElement: Element; targetBedId: string }) {
+  const beds = useGameStore(s => s.beds);
+  const adjIds = BED_ADJACENCY[targetBedId] ?? [];
+  const adjBeds = adjIds.map(id => beds.find(b => b.id === id)).filter(Boolean) as typeof beds;
+
+  const hints: { type: "generate" | "overcome" | "neutral"; element: Element; bedName: string }[] = [];
+  for (const b of adjBeds) {
+    if (b.status !== "occupied" || !b.beastSnapshot) continue;
+    const br = BREEDS.find(x => x.id === b.beastSnapshot!.breedId);
+    if (!br) continue;
+    const rel = getElementRelation(beastElement, br.element);
+    const reverseRel = getElementRelation(br.element, beastElement);
+    if (rel === "generate" || reverseRel === "generate") {
+      hints.push({ type: "generate", element: br.element, bedName: b.name });
+    } else if (rel === "overcome" || reverseRel === "overcome") {
+      hints.push({ type: "overcome", element: br.element, bedName: b.name });
+    } else {
+      hints.push({ type: "neutral", element: br.element, bedName: b.name });
+    }
+  }
+
+  if (hints.length === 0) {
+    return (
+      <div className="flex items-center gap-2 p-2 rounded-lg bg-gray-50 border border-gray-200 text-gray-600 text-[11px]">
+        <Shield className="w-3.5 h-3.5 flex-shrink-0" />
+        相邻床位暂无灵兽，可自由安排
+      </div>
+    );
+  }
+
+  const hasOvercome = hints.some(h => h.type === "overcome");
+  const hasGenerate = hints.some(h => h.type === "generate");
+
+  return (
+    <div className={`flex items-start gap-2 p-2 rounded-lg border text-[11px] ${
+      hasOvercome ? "bg-red-50 border-red-200 text-red-700"
+        : hasGenerate ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+        : "bg-gray-50 border-gray-200 text-gray-600"
+    }`}>
+      <Sparkles className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+      <div className="flex-1 min-w-0">
+        <span className="font-semibold">相邻元素提示：</span>
+        <div className="flex flex-wrap gap-1 mt-1">
+          {hints.map((h, i) => (
+            <span key={i} className={`px-1.5 py-0.5 rounded border ${
+              h.type === "generate" ? "bg-emerald-100 border-emerald-300 text-emerald-700"
+                : h.type === "overcome" ? "bg-red-100 border-red-300 text-red-700"
+                : "bg-white border-gray-300 text-gray-600"
+            }`}>
+              {h.bedName} {ELEMENT_EMOJI[h.element]}
+              {h.type === "generate" ? "相生↑" : h.type === "overcome" ? "相克↓" : "无影响"}
+            </span>
+          ))}
+        </div>
+        {hasOvercome && <p className="mt-1 text-[10px]">⚠️ 存在相克元素相邻，将加重污染干扰！建议调整床位或隔离。</p>}
+        {hasGenerate && !hasOvercome && <p className="mt-1 text-[10px]">✨ 存在相生元素相邻，有助于治疗！</p>}
+      </div>
+    </div>
+  );
 }
 
 export function TreatmentModal({ open, onClose, targetBed }: TreatmentModalProps) {
@@ -44,11 +106,6 @@ export function TreatmentModal({ open, onClose, targetBed }: TreatmentModalProps
   }, [beast]);
 
   const topSuspects = useMemo(() => showAllDiseases ? suspectedDiseases : suspectedDiseases.slice(0, 3), [suspectedDiseases, showAllDiseases]);
-
-  const recommendedPrescription = useMemo(() => {
-    if (!playerDiagnosis) return null;
-    return PRESCRIPTIONS.find(p => p.disease === playerDiagnosis) || null;
-  }, [playerDiagnosis]);
 
   useEffect(() => {
     if (open) {
@@ -135,6 +192,41 @@ export function TreatmentModal({ open, onClose, targetBed }: TreatmentModalProps
           <div className="mx-4 mt-3 flex items-center gap-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs">
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
             请先点击一张空闲的床位，再为这位灵兽安排诊断和治疗。
+          </div>
+        )}
+
+        {targetBed && breed && (
+          <div className="mx-4 mt-3 space-y-2">
+            {targetBed.pollutionLevel !== "clean" && (
+              <div className="flex items-center gap-2 p-2.5 rounded-lg bg-orange-50 border border-orange-200 text-orange-800 text-xs">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <div>
+                  <span className="font-semibold">床位污染警告：</span>
+                  <span className={`px-1.5 py-0.5 mx-1 rounded border ${POLLUTION_LEVEL_COLORS[targetBed.pollutionLevel]}`}>
+                    {POLLUTION_LEVEL_NAMES[targetBed.pollutionLevel]} ({targetBed.pollutionValue})
+                  </span>
+                  将降低治疗成功率和诊金，建议先净化再安排治疗！
+                </div>
+              </div>
+            )}
+            {targetBed.elementResidues.length > 0 && (
+              <div className="flex items-center gap-2 p-2.5 rounded-lg bg-cyan-50 border border-cyan-200 text-cyan-800 text-xs flex-wrap">
+                <Droplets className="w-4 h-4 flex-shrink-0" />
+                <span className="font-semibold">元素残留：</span>
+                {targetBed.elementResidues.map(r => {
+                  const rel = getElementRelation(r.element, breed.element);
+                  const relLabel = rel === "generate" ? "相生+" : rel === "overcome" ? "相克-" : "";
+                  const relColor = rel === "generate" ? "text-emerald-600" : rel === "overcome" ? "text-red-600" : "text-gray-500";
+                  return (
+                    <span key={r.element} className="px-1.5 py-0.5 rounded border bg-white/60 border-gray-200">
+                      {ELEMENT_EMOJI[r.element]} {ELEMENT_NAMES[r.element]} {r.amount}
+                      <span className={`ml-1 ${relColor}`}>{relLabel}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+            <AdjacencyHint beastElement={breed.element} targetBedId={targetBed.id} />
           </div>
         )}
 

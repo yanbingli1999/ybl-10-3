@@ -18,9 +18,29 @@ export type WeatherType = "sunny" | "cloudy" | "rainy" | "stormy" | "misty";
 
 export type StaffStatus = "idle" | "working" | "resting";
 
-export type BedStatus = "empty" | "occupied" | "cleaning";
+export type BedStatus = "empty" | "occupied" | "cleaning" | "isolated";
 
 export type TreatmentResult = "pending" | "success" | "fail" | "worsen";
+
+export type PollutionLevel = "clean" | "mild" | "moderate" | "severe";
+
+export type ElementRelation = "generate" | "overcome" | "neutral";
+
+export interface ElementResidue {
+  element: Element;
+  amount: number;
+}
+
+export interface PollutionEffect {
+  successRateModifier: number;
+  severityModifier: number;
+  feeModifier: number;
+}
+
+export interface BedAdjacency {
+  bedId: string;
+  adjacentIds: string[];
+}
 
 export interface Breed {
   id: string;
@@ -99,6 +119,10 @@ export interface Bed {
     satisfaction: number;
     symptoms: string[];
   } | null;
+  pollutionLevel: PollutionLevel;
+  pollutionValue: number;
+  elementResidues: ElementResidue[];
+  isolated: boolean;
 }
 
 export interface Treatment {

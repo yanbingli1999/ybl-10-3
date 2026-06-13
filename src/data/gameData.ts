@@ -1,4 +1,4 @@
-import type { Breed, Herb, Prescription, DiseaseType, Staff } from "@/types/game";
+import type { Breed, Herb, Prescription, DiseaseType, Staff, Element, ElementRelation } from "@/types/game";
 
 export const DISEASE_SYMPTOMS: Record<DiseaseType, string[]> = {
   fever: ["体温偏高", "无精打采", "食欲不振", "鼻子发干", "魔力发热"],
@@ -76,6 +76,102 @@ export const ELEMENT_EMOJI: Record<string, string> = {
   dark: "🌑",
   neutral: "⚪",
 };
+
+export const ELEMENT_COLORS: Record<string, string> = {
+  fire: "text-red-500",
+  water: "text-blue-500",
+  wood: "text-green-500",
+  thunder: "text-yellow-500",
+  earth: "text-amber-700",
+  light: "text-yellow-300",
+  dark: "text-purple-600",
+  neutral: "text-gray-400",
+};
+
+export const ELEMENT_BG_COLORS: Record<string, string> = {
+  fire: "bg-red-500/10 border-red-400/30",
+  water: "bg-blue-500/10 border-blue-400/30",
+  wood: "bg-green-500/10 border-green-400/30",
+  thunder: "bg-yellow-500/10 border-yellow-400/30",
+  earth: "bg-amber-600/10 border-amber-500/30",
+  light: "bg-yellow-200/20 border-yellow-300/40",
+  dark: "bg-purple-600/10 border-purple-500/30",
+  neutral: "bg-gray-100 border-gray-300",
+};
+
+export const POLLUTION_LEVEL_NAMES: Record<string, string> = {
+  clean: "洁净",
+  mild: "轻度污染",
+  moderate: "中度污染",
+  severe: "重度污染",
+};
+
+export const POLLUTION_LEVEL_COLORS: Record<string, string> = {
+  clean: "bg-emerald-100 text-emerald-700 border-emerald-300",
+  mild: "bg-yellow-100 text-yellow-700 border-yellow-300",
+  moderate: "bg-orange-100 text-orange-700 border-orange-300",
+  severe: "bg-red-100 text-red-700 border-red-300",
+};
+
+export const POLLUTION_THRESHOLDS = {
+  clean: 0,
+  mild: 20,
+  moderate: 50,
+  severe: 80,
+};
+
+export const ELEMENT_GENERATES: Record<Element, Element | null> = {
+  fire: "earth",
+  earth: "thunder",
+  thunder: "water",
+  water: "wood",
+  wood: "fire",
+  light: null,
+  dark: null,
+};
+
+export const ELEMENT_OVERCOMES: Record<Element, Element | null> = {
+  fire: "wood",
+  wood: "earth",
+  earth: "water",
+  water: "fire",
+  thunder: "wood",
+  light: "dark",
+  dark: "light",
+};
+
+export function getElementRelation(source: Element, target: Element): ElementRelation {
+  if (ELEMENT_GENERATES[source] === target) return "generate";
+  if (ELEMENT_OVERCOMES[source] === target) return "overcome";
+  return "neutral";
+}
+
+export const BED_ADJACENCY: Record<string, string[]> = {
+  bed_1: ["bed_2", "bed_3"],
+  bed_2: ["bed_1", "bed_4"],
+  bed_3: ["bed_1", "bed_4"],
+  bed_4: ["bed_2", "bed_3"],
+};
+
+export interface PurifyInfo {
+  targetElement: Element | "all";
+  purifyAmount: number;
+}
+
+export const PURIFY_HERB_INFO: Record<string, PurifyInfo> = {
+  herb_purify_fire: { targetElement: "fire", purifyAmount: 30 },
+  herb_purify_water: { targetElement: "water", purifyAmount: 30 },
+  herb_purify_wood: { targetElement: "wood", purifyAmount: 30 },
+  herb_purify_thunder: { targetElement: "thunder", purifyAmount: 30 },
+  herb_purify_earth: { targetElement: "earth", purifyAmount: 30 },
+  herb_purify_dark: { targetElement: "dark", purifyAmount: 40 },
+  herb_purify_light: { targetElement: "light", purifyAmount: 40 },
+  herb_purify_all: { targetElement: "all", purifyAmount: 50 },
+};
+
+export function isPurifyHerb(herbId: string): boolean {
+  return herbId in PURIFY_HERB_INFO;
+}
 
 export const BREEDS: Breed[] = [
   {
@@ -292,6 +388,70 @@ export const HERBS: Herb[] = [
     element: "earth",
     price: 25,
     description: "固本培元，增强灵兽免疫力。",
+  },
+  {
+    id: "herb_purify_fire",
+    name: "玄冥冰莲",
+    emoji: "🪷",
+    element: "water",
+    price: 45,
+    description: "极寒圣品，可净化火气残留，净化+30。",
+  },
+  {
+    id: "herb_purify_water",
+    name: "九阳草",
+    emoji: "🌻",
+    element: "fire",
+    price: 45,
+    description: "至阳之草，可驱散水湿阴寒，净化+30。",
+  },
+  {
+    id: "herb_purify_wood",
+    name: "鎏金砂",
+    emoji: "✨",
+    element: "thunder",
+    price: 45,
+    description: "雷电淬炼的金沙，可消弭木气郁结，净化+30。",
+  },
+  {
+    id: "herb_purify_thunder",
+    name: "坤元土",
+    emoji: "🏔️",
+    element: "earth",
+    price: 45,
+    description: "厚德载物之土，可吸纳雷气躁动，净化+30。",
+  },
+  {
+    id: "herb_purify_earth",
+    name: "青木符",
+    emoji: "🌳",
+    element: "wood",
+    price: 45,
+    description: "生机盎然的木符，可疏解土气壅塞，净化+30。",
+  },
+  {
+    id: "herb_purify_dark",
+    name: "破晦珠",
+    emoji: "🔮",
+    element: "light",
+    price: 60,
+    description: "圣光凝结之宝珠，驱散阴暗邪气，净化+40。",
+  },
+  {
+    id: "herb_purify_light",
+    name: "玄阴玉",
+    emoji: "🌙",
+    element: "dark",
+    price: 60,
+    description: "月华凝练之玉，平息光灵过盛，净化+40。",
+  },
+  {
+    id: "herb_purify_all",
+    name: "太极混元丹",
+    emoji: "☯️",
+    element: "neutral",
+    price: 100,
+    description: "传说中的圣丹，可净化一切元素残留，全净化+50。",
   },
 ];
 

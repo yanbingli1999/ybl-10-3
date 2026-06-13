@@ -11,8 +11,10 @@ import type {
   DiseaseType,
   Severity,
   WeatherType,
-  Prescription,
   TreatmentResult,
+  Element,
+  PollutionLevel,
+  ElementResidue,
 } from "@/types/game";
 import {
   BREEDS,
@@ -26,6 +28,13 @@ import {
   NOTES_SUCCESS,
   NOTES_FAIL,
   DISEASE_NAMES,
+  SEVERITY_NAMES,
+  BED_ADJACENCY,
+  POLLUTION_THRESHOLDS,
+  getElementRelation,
+  PURIFY_HERB_INFO,
+  isPurifyHerb,
+  ELEMENT_NAMES,
 } from "@/data/gameData";
 
 const DISEASE_TYPES: DiseaseType[] = [
@@ -88,6 +97,39 @@ function calcTreatmentHours(severity: Severity, staffBoost: boolean): number {
   return staffBoost ? Math.ceil(base * 0.7) : base;
 }
 
+function getPollutionLevel(value: number): PollutionLevel {
+  if (value >= POLLUTION_THRESHOLDS.severe) return "severe";
+  if (value >= POLLUTION_THRESHOLDS.moderate) return "moderate";
+  if (value >= POLLUTION_THRESHOLDS.mild) return "mild";
+  return "clean";
+}
+
+function calcTotalPollution(residues: ElementResidue[]): number {
+  return residues.reduce((sum, r) => sum + r.amount, 0);
+}
+
+function addResidue(residues: ElementResidue[], element: Element, amount: number): ElementResidue[] {
+  const existing = residues.find(r => r.element === element);
+  if (existing) {
+    return residues.map(r => r.element === element ? { ...r, amount: Math.min(100, r.amount + amount) } : r);
+  }
+  return [...residues, { element, amount: Math.min(100, amount) }];
+}
+
+function removeResidue(residues: ElementResidue[], element: Element | "all", amount: number): ElementResidue[] {
+  if (element === "all") {
+    return residues.map(r => ({ ...r, amount: Math.max(0, r.amount - amount) })).filter(r => r.amount > 0);
+  }
+  return residues.map(r => r.element === element ? { ...r, amount: Math.max(0, r.amount - amount) } : r).filter(r => r.amount > 0);
+}
+
+const SEVERITY_ORDER: Severity[] = ["mild", "moderate", "severe", "critical"];
+
+function worsenSeverity(sev: Severity, levels: number): Severity {
+  const idx = SEVERITY_ORDER.indexOf(sev);
+  return SEVERITY_ORDER[Math.min(SEVERITY_ORDER.length - 1, idx + levels)];
+}
+
 export function guessDiseaseFromSymptoms(symptoms: string[]): { disease: DiseaseType; matchRate: number }[] {
   const results: { disease: DiseaseType; matchRate: number }[] = [];
   for (const disease of DISEASE_TYPES) {
@@ -118,6 +160,7 @@ export interface GameState {
   notifications: Notification[];
   selectedBeastId: string | null;
   selectedBedId: string | null;
+  selectedBedForSwapId: string | null;
   lastBeastSpawn: number;
 
   // Actions
@@ -125,6 +168,7 @@ export interface GameState {
   setSpeed: (s: number) => void;
   selectBeast: (id: string | null) => void;
   selectBed: (id: string | null) => void;
+  selectBedForSwap: (id: string | null) => void;
   dismissBeast: (id: string) => void;
   assignBedAndTreat: (beastId: string, bedId: string, staffId: string | null, herbIds: string[], playerDiagnosis: DiseaseType | null) => void;
   purchaseHerb: (herbId: string, qty: number) => void;
@@ -133,9 +177,13 @@ export interface GameState {
   clearNotification: (id: string) => void;
   resetGame: () => void;
   tickGame: (steps?: number) => void;
+  swapBeds: (bedId1: string, bedId2: string) => void;
+  purifyBed: (bedId: string, herbIds: string[]) => void;
+  toggleIsolateBed: (bedId: string) => void;
   _spawnInitialBeasts: () => void;
   _addTransaction: (type: Transaction["type"], category: string, amount: number, description: string) => void;
   _dailySettlement: () => void;
+  _propagatePollution: () => void;
 }
 
 function createInitialBeds(): Bed[] {
@@ -152,6 +200,10 @@ function createInitialBeds(): Bed[] {
     playerDiagnosis: null,
     startedAt: null,
     beastSnapshot: null,
+    pollutionLevel: "clean",
+    pollutionValue: 0,
+    elementResidues: [],
+    isolated: false,
   }));
 }
 
@@ -181,6 +233,7 @@ function buildInitialState() {
     notifications: [] as Notification[],
     selectedBeastId: null,
     selectedBedId: null,
+    selectedBedForSwapId: null,
     lastBeastSpawn: 8,
   };
 }
@@ -192,8 +245,9 @@ export const useGameStore = create<GameState>()(
 
       togglePause: () => set(s => ({ isPaused: !s.isPaused })),
       setSpeed: (s: number) => set({ speed: s }),
-      selectBeast: (id) => set({ selectedBeastId: id, selectedBedId: null }),
-      selectBed: (id) => set({ selectedBedId: id, selectedBeastId: null }),
+      selectBeast: (id) => set({ selectedBeastId: id, selectedBedId: null, selectedBedForSwapId: null }),
+      selectBed: (id) => set({ selectedBedId: id, selectedBeastId: null, selectedBedForSwapId: null }),
+      selectBedForSwap: (id) => set(s => ({ selectedBedForSwapId: s.selectedBedForSwapId === id ? null : id })),
 
       addNotification: (type, message) => set(s => ({
         notifications: [{
@@ -347,13 +401,24 @@ export const useGameStore = create<GameState>()(
 
         const breed = BREEDS.find(b => b.id === (beast?.breedId || ""));
 
+        const pollutionFeeMult = bed.pollutionLevel === "severe" ? 0.6
+          : bed.pollutionLevel === "moderate" ? 0.8
+          : bed.pollutionLevel === "mild" ? 0.95
+          : 1.1;
+        const pollutionFeeNote = bed.pollutionLevel === "severe" ? "（重度污染导致诊金大减）"
+          : bed.pollutionLevel === "moderate" ? "（中度污染导致诊金减少）"
+          : bed.pollutionLevel === "mild" ? "（轻度污染略减诊金）"
+          : "（洁净环境获得诊金加成）";
+
         if (bed.result === "success" && beast && breed) {
           const severityMult = { mild: 1, moderate: 1.4, severe: 1.8, critical: 2.3 }[beast.severity] || 1;
           const satMult = beast.satisfaction / 100;
           const reputationBonus = s.reputation / 100;
-          const revenue = Math.floor(breed.baseFees * severityMult * (0.8 + 0.4 * satMult) * (1 + reputationBonus * 0.3));
+          const baseRevenue = Math.floor(breed.baseFees * severityMult * (0.8 + 0.4 * satMult) * (1 + reputationBonus * 0.3));
+          const revenue = Math.floor(baseRevenue * pollutionFeeMult);
           let repGain = Math.ceil(3 * severityMult * satMult);
           const trustGain = Math.ceil(10 * severityMult * satMult);
+          if (bed.pollutionLevel === "severe") repGain = Math.max(0, repGain - 2);
 
           const diagnosisCorrect = bed.playerDiagnosis === beast.disease;
           if (diagnosisCorrect) {
@@ -408,13 +473,15 @@ export const useGameStore = create<GameState>()(
             beastRelationships: { ...st.beastRelationships, [breed.id]: newRel },
             medicalRecords: [record, ...st.medicalRecords],
           }));
-          get()._addTransaction("income", "诊金收入", revenue, `治愈 ${breed.name}·${beast.name}${evolved ? "(进化加成)" : ""}`);
+          get()._addTransaction("income", "诊金收入", revenue, `治愈 ${breed.name}·${beast.name}${evolved ? "(进化加成)" : ""}${pollutionFeeNote}`);
           const evolveMsg = evolved ? " 🎉灵兽发生进化！额外获得加成！" : "";
           const diagMsg = diagnosisCorrect ? " 🔍诊断正确！" : "";
-          get().addNotification("success", `治愈成功！获得 ${revenue} 金，声望+${repGain}，亲密度+${trustGain}${diagMsg}${evolveMsg}`);
+          const pollMsg = bed.pollutionLevel !== "clean" ? ` ⚠️${pollutionFeeNote}` : ` ✨${pollutionFeeNote}`;
+          get().addNotification("success", `治愈成功！获得 ${revenue} 金，声望+${repGain}，亲密度+${trustGain}${diagMsg}${evolveMsg}${pollMsg}`);
         } else if (bed.result === "fail" && beast) {
-          const penaltyMoney = Math.floor(s.money * 0.05) + 20;
-          const penaltyRep = 5;
+          const basePenalty = Math.floor(s.money * 0.05) + 20;
+          const penaltyMoney = Math.floor(basePenalty * (bed.pollutionLevel === "severe" ? 1.5 : 1));
+          const penaltyRep = bed.pollutionLevel === "severe" ? 8 : 5;
           const breedName = breed?.name || "灵兽";
 
           const notes = rand(NOTES_FAIL);
@@ -439,12 +506,15 @@ export const useGameStore = create<GameState>()(
             reputation: Math.max(0, st.reputation - penaltyRep),
             medicalRecords: [record, ...st.medicalRecords],
           }));
-          get()._addTransaction("expense", "误诊赔偿", penaltyMoney, `${breedName}·${beast.name} 治疗失败赔偿`);
+          get()._addTransaction("expense", "误诊赔偿", penaltyMoney, `${breedName}·${beast.name} 治疗失败赔偿${pollutionFeeNote}`);
           const realDiseaseName = DISEASE_NAMES[beast.disease];
-          get().addNotification("error", `治疗失败！确诊为「${realDiseaseName}」。赔偿 ${penaltyMoney} 金，声望-${penaltyRep}`);
+          const pollMsg = bed.pollutionLevel === "severe" ? ` 污染加重处罚！` : "";
+          get().addNotification("error", `治疗失败！确诊为「${realDiseaseName}」。赔偿 ${penaltyMoney} 金，声望-${penaltyRep}${pollMsg}`);
         }
 
-        // Release staff & bed
+        const leftoverResidues = bed.elementResidues.map(r => ({ ...r, amount: Math.floor(r.amount * 0.3) })).filter(r => r.amount > 0);
+        const leftoverPollution = calcTotalPollution(leftoverResidues);
+
         const newBeds = s.beds.map(b => b.id === bedId ? {
           ...b,
           status: "empty" as const,
@@ -457,6 +527,10 @@ export const useGameStore = create<GameState>()(
           playerDiagnosis: null,
           startedAt: null,
           beastSnapshot: null,
+          isolated: false,
+          elementResidues: leftoverResidues,
+          pollutionValue: leftoverPollution,
+          pollutionLevel: getPollutionLevel(leftoverPollution),
         } : b);
         const staffToRelease = bed.assignedStaffId;
         const newStaff = s.staff.map(st => st.id === staffToRelease ? {
@@ -507,6 +581,148 @@ export const useGameStore = create<GameState>()(
         get().addNotification("info", `=== 第${day}天结算 === 支付薪资${totalWage}金。${eventMsg} 新的一天开始啦！`);
       },
 
+      swapBeds: (bedId1, bedId2) => {
+        const s = get();
+        const b1 = s.beds.find(b => b.id === bedId1);
+        const b2 = s.beds.find(b => b.id === bedId2);
+        if (!b1 || !b2) return;
+        const newBeds = s.beds.map(b => {
+          if (b.id === bedId1) {
+            return {
+              ...b2,
+              id: b1.id,
+              name: b1.name,
+            };
+          }
+          if (b.id === bedId2) {
+            return {
+              ...b1,
+              id: b2.id,
+              name: b2.name,
+            };
+          }
+          return b;
+        });
+        const newStaff = s.staff.map(st => {
+          if (st.assignedBedId === bedId1) return { ...st, assignedBedId: bedId2 };
+          if (st.assignedBedId === bedId2) return { ...st, assignedBedId: bedId1 };
+          return st;
+        });
+        set({ beds: newBeds, staff: newStaff, selectedBedForSwapId: null, selectedBedId: null });
+        get().addNotification("info", `已交换 ${b1.name} 和 ${b2.name} 的位置`);
+      },
+
+      purifyBed: (bedId, herbIds) => {
+        const s = get();
+        const bed = s.beds.find(b => b.id === bedId);
+        if (!bed) return;
+        for (const hid of herbIds) {
+          if ((s.inventory[hid] ?? 0) < 1) {
+            s.addNotification("error", `药材不足`);
+            return;
+          }
+          if (!isPurifyHerb(hid)) {
+            s.addNotification("error", `所选药材不是净化药材`);
+            return;
+          }
+        }
+        const newInventory = { ...s.inventory };
+        let totalPurifyCost = 0;
+        let newResidues = [...bed.elementResidues];
+        const purifyMsgs: string[] = [];
+        for (const hid of herbIds) {
+          newInventory[hid] = (newInventory[hid] ?? 0) - 1;
+          const herb = HERBS.find(h => h.id === hid);
+          const info = PURIFY_HERB_INFO[hid];
+          totalPurifyCost += herb?.price ?? 0;
+          newResidues = removeResidue(newResidues, info.targetElement, info.purifyAmount);
+          const targetName = info.targetElement === "all" ? "全部元素" : ELEMENT_NAMES[info.targetElement];
+          purifyMsgs.push(`${herb?.emoji}${herb?.name}(${targetName}-${info.purifyAmount})`);
+        }
+        const newPollutionValue = calcTotalPollution(newResidues);
+        const newPollutionLevel = getPollutionLevel(newPollutionValue);
+        const newBeds = s.beds.map(b => b.id === bedId ? {
+          ...b,
+          elementResidues: newResidues,
+          pollutionValue: newPollutionValue,
+          pollutionLevel: newPollutionLevel,
+        } : b);
+        set({ beds: newBeds, inventory: newInventory, money: s.money - totalPurifyCost });
+        get()._addTransaction("expense", "净化消耗", totalPurifyCost, `${bed.name} 净化 ${purifyMsgs.join("+")}`);
+        get().addNotification("success", `${bed.name} 净化完成！使用 ${purifyMsgs.join("、")}，当前污染值 ${newPollutionValue}`);
+      },
+
+      toggleIsolateBed: (bedId) => {
+        const s = get();
+        const bed = s.beds.find(b => b.id === bedId);
+        if (!bed) return;
+        if (bed.status === "empty") {
+          s.addNotification("warning", "空床位无需隔离");
+          return;
+        }
+        const newIsolated = !bed.isolated;
+        const newBeds = s.beds.map(b => b.id === bedId ? { ...b, isolated: newIsolated } : b);
+        set({ beds: newBeds });
+        get().addNotification("info", newIsolated ? `${bed.name} 已开启隔离模式，不参与污染传播` : `${bed.name} 已关闭隔离模式`);
+      },
+
+      _propagatePollution: () => {
+        const s = get();
+        const beds = [...s.beds];
+        const bedsById: Record<string, Bed> = {};
+        beds.forEach(b => { bedsById[b.id] = { ...b, elementResidues: [...b.elementResidues] }; });
+
+        for (const sourceBed of beds) {
+          if (sourceBed.isolated) continue;
+          if (sourceBed.status !== "occupied") continue;
+          if (!sourceBed.beastSnapshot) continue;
+          const breed = BREEDS.find(b => b.id === sourceBed.beastSnapshot!.breedId);
+          if (!breed) continue;
+
+          const emitElement = breed.element;
+          const emitAmount = sourceBed.beastSnapshot.severity === "critical" ? 4
+            : sourceBed.beastSnapshot.severity === "severe" ? 3
+            : sourceBed.beastSnapshot.severity === "moderate" ? 2
+            : 1;
+
+          const adjIds = BED_ADJACENCY[sourceBed.id] ?? [];
+          for (const adjId of adjIds) {
+            const targetBed = bedsById[adjId];
+            if (!targetBed || targetBed.isolated) continue;
+
+            const relation = getElementRelation(emitElement, breed.element);
+            void relation;
+
+            let actualEmit = emitAmount;
+            if (targetBed.status === "occupied" && targetBed.beastSnapshot) {
+              const targetBreed = BREEDS.find(b => b.id === targetBed.beastSnapshot!.breedId);
+              if (targetBreed) {
+                const targetRelation = getElementRelation(emitElement, targetBreed.element);
+                if (targetRelation === "generate") {
+                  actualEmit = Math.ceil(emitAmount * 1.5);
+                } else if (targetRelation === "overcome") {
+                  actualEmit = Math.max(0, Math.floor(emitAmount * 0.5));
+                }
+              }
+            }
+            if (actualEmit > 0) {
+              targetBed.elementResidues = addResidue(targetBed.elementResidues, emitElement, actualEmit);
+            }
+          }
+        }
+
+        const finalBeds = Object.values(bedsById).map(b => {
+          const newPollutionValue = calcTotalPollution(b.elementResidues);
+          const newPollutionLevel = getPollutionLevel(newPollutionValue);
+          return {
+            ...b,
+            pollutionValue: newPollutionValue,
+            pollutionLevel: newPollutionLevel,
+          };
+        });
+        set({ beds: finalBeds });
+      },
+
       resetGame: () => {
         set(buildInitialState());
         setTimeout(() => get()._spawnInitialBeasts(), 100);
@@ -517,17 +733,66 @@ export const useGameStore = create<GameState>()(
           const s = get();
           if (s.isPaused) return;
 
-          let newTime = s.currentTime + 1;
-          let dayPassed = false;
-          if (newTime >= 24) { dayPassed = true; }
+          const newTime = s.currentTime + 1;
+          const dayPassed = newTime >= 24;
 
-          let state = { ...s };
+          const state = { ...s };
+          const bedsArr = [...state.beds];
+          const bedsById: Record<string, Bed> = {};
+          bedsArr.forEach(b => { bedsById[b.id] = { ...b, elementResidues: [...b.elementResidues] }; });
+
+          // 0. 污染传播
+          for (const sourceBed of bedsArr) {
+            if (sourceBed.isolated) continue;
+            if (sourceBed.status !== "occupied") continue;
+            if (!sourceBed.beastSnapshot) continue;
+            const breed = BREEDS.find(b => b.id === sourceBed.beastSnapshot!.breedId);
+            if (!breed) continue;
+
+            const emitElement = breed.element;
+            const emitAmount = sourceBed.beastSnapshot.severity === "critical" ? 4
+              : sourceBed.beastSnapshot.severity === "severe" ? 3
+              : sourceBed.beastSnapshot.severity === "moderate" ? 2
+              : 1;
+
+            const adjIds = BED_ADJACENCY[sourceBed.id] ?? [];
+            for (const adjId of adjIds) {
+              const targetBed = bedsById[adjId];
+              if (!targetBed || targetBed.isolated) continue;
+
+              let actualEmit = emitAmount;
+              if (targetBed.status === "occupied" && targetBed.beastSnapshot) {
+                const targetBreed = BREEDS.find(b => b.id === targetBed.beastSnapshot!.breedId);
+                if (targetBreed) {
+                  const targetRelation = getElementRelation(emitElement, targetBreed.element);
+                  if (targetRelation === "generate") {
+                    actualEmit = Math.ceil(emitAmount * 1.5);
+                  } else if (targetRelation === "overcome") {
+                    actualEmit = Math.max(0, Math.floor(emitAmount * 0.5));
+                  }
+                }
+              }
+              if (actualEmit > 0) {
+                targetBed.elementResidues = addResidue(targetBed.elementResidues, emitElement, actualEmit);
+              }
+            }
+          }
+
+          state.beds = Object.values(bedsById).map(b => {
+            const newPollutionValue = calcTotalPollution(b.elementResidues);
+            const newPollutionLevel = getPollutionLevel(newPollutionValue);
+            return {
+              ...b,
+              pollutionValue: newPollutionValue,
+              pollutionLevel: newPollutionLevel,
+            };
+          });
 
           // 1. 队列恶化
           const newQueue: Beast[] = state.waitingQueue.map(b => {
             const waited = b.waitHours + 1;
             let sev = b.severity;
-            let sat = Math.max(0, b.satisfaction - randomInt(2, 5));
+            const sat = Math.max(0, b.satisfaction - randomInt(2, 5));
             if (waited > 4 && sev === "mild") sev = "moderate";
             else if (waited > 7 && sev === "moderate") sev = "severe";
             else if (waited > 10 && sev === "severe") sev = "critical";
@@ -545,31 +810,55 @@ export const useGameStore = create<GameState>()(
           state.waitingQueue = stillWaiting;
           state.reputation = Math.max(0, state.reputation - repLossQueue);
 
-          // 2. 治疗进度
+          // 2. 治疗进度（考虑污染影响）
           const newBeds = state.beds.map(b => {
             if (b.status !== "occupied" || b.result !== "pending") return b;
             const staffBonus = b.assignedStaffId ? 1.3 : 1;
-            const newProgress = b.treatmentProgress + staffBonus;
+            const pollutionSlowdown = b.pollutionLevel === "severe" ? 0.7 : b.pollutionLevel === "moderate" ? 0.85 : b.pollutionLevel === "mild" ? 0.95 : 1;
+            const newProgress = b.treatmentProgress + staffBonus * pollutionSlowdown;
             let result: TreatmentResult = b.result;
+            let newSnapshot = b.beastSnapshot;
+
+            if (b.beastSnapshot && b.pollutionLevel !== "clean" && Math.random() < 0.15) {
+              const sevWorsenLevels = b.pollutionLevel === "severe" ? 1 : 0;
+              if (sevWorsenLevels > 0) {
+                const newSev = worsenSeverity(b.beastSnapshot.severity, sevWorsenLevels);
+                if (newSev !== b.beastSnapshot.severity) {
+                  newSnapshot = { ...b.beastSnapshot, severity: newSev };
+                  const breed = BREEDS.find(br => br.id === b.beastSnapshot!.breedId);
+                  get().addNotification("warning", `${breed?.name || "灵兽"}·${b.beastSnapshot.name} 受灵气污染影响，病情恶化为「${SEVERITY_NAMES[newSev]}」！`);
+                }
+              }
+            }
+
             if (newProgress >= b.treatmentTotal) {
-              // 判定
               const herbs = b.currentPrescriptionHerbs;
               const matchedPresc = PRESCRIPTIONS.find(p =>
                 JSON.stringify([...p.herbIds].sort()) === JSON.stringify([...herbs].sort())
               );
               let finalRate = matchedPresc ? matchedPresc.successRate : 30;
-              // 员工加成
               if (b.assignedStaffId) {
                 const stf = state.staff.find(x => x.id === b.assignedStaffId);
                 finalRate += (stf?.skillLevel ?? 1) * 5;
               }
-              // 疾病严重度减成
-              const sev = b.beastSnapshot?.severity ?? "mild";
+              const sev = newSnapshot?.severity ?? "mild";
               const sevDebuff = { mild: 0, moderate: -5, severe: -10, critical: -15 }[sev] || 0;
-              finalRate = Math.max(5, Math.min(98, finalRate + sevDebuff));
+              const pollutionDebuff = b.pollutionLevel === "severe" ? -20 : b.pollutionLevel === "moderate" ? -10 : b.pollutionLevel === "mild" ? -3 : 0;
+              let elementBonus = 0;
+              if (b.beastSnapshot) {
+                const bedBreed = BREEDS.find(br => br.id === b.beastSnapshot!.breedId);
+                if (bedBreed) {
+                  for (const residue of b.elementResidues) {
+                    const rel = getElementRelation(residue.element, bedBreed.element);
+                    if (rel === "generate") elementBonus += 3;
+                    else if (rel === "overcome") elementBonus -= 5;
+                  }
+                }
+              }
+              finalRate = Math.max(5, Math.min(98, finalRate + sevDebuff + pollutionDebuff + elementBonus));
               result = Math.random() * 100 <= finalRate ? "success" : "fail";
             }
-            return { ...b, treatmentProgress: Math.min(newProgress, b.treatmentTotal), result };
+            return { ...b, treatmentProgress: Math.min(newProgress, b.treatmentTotal), result, beastSnapshot: newSnapshot };
           });
           state.beds = newBeds;
 

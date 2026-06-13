@@ -46,14 +46,23 @@ export default function ClinicPage() {
             </div>
             <ol className="text-xs text-gray-600 space-y-1 list-decimal list-inside">
               <li>先在左侧<span className="font-semibold text-clinic-deep">候诊队列</span>中点击选择一位灵兽（危重者优先）</li>
-              <li>再在<span className="font-semibold text-clinic-deep">治疗区</span>点击一张空闲的床位</li>
+              <li>再在<span className="font-semibold text-clinic-deep">灵气污染场</span>点击一张空闲的床位</li>
+              <li>注意查看床位的<span className="text-orange-600 font-semibold">污染状态</span>和<span className="text-emerald-600 font-semibold">相邻元素关系</span>，相生增益、相克干扰</li>
               <li>在诊断弹窗中观察症状 → 选择合适的药材配方（最多3味）→ 可分配护理员</li>
               <li>点击「开始治疗」，治疗完成后点击床位领取诊金或处理失败</li>
+              <li>可使用「调整床位」交换位置、「净化」清除元素残留、「隔离」阻挡污染传播</li>
               <li>药材不够时在右侧仓库采购，每晚 24:00 自动结算日薪</li>
             </ol>
             <div className="mt-3 p-2 rounded-lg bg-clinic-amber/10 border border-clinic-amber/30 text-[11px] text-clinic-deep">
               <span className="font-semibold">⚠️ 注意：</span>
-              药方与疾病完全匹配时成功率最高（75-92%）；错误搭配仅 30% 成功率，误诊会扣钱扣声望！
+              药方与疾病完全匹配时成功率最高（75-92%）；错误搭配仅 30% 成功率；<span className="text-orange-600 font-semibold">重度污染会额外减少成功率并降低诊金</span>，误诊会扣钱扣声望！
+            </div>
+            <div className="mt-2 p-2 rounded-lg bg-clinic-jade/10 border border-clinic-jade/30 text-[11px] text-clinic-deep">
+              <span className="font-semibold">✨ 相生顺序：</span>
+              🔥火 → 🪨土 → ⚡雷 → 💧水 → 🌿木 → 🔥火
+              <span className="mx-2 text-gray-400">|</span>
+              <span className="font-semibold">⚔️ 相克：</span>
+              火克木、木克土、土克水、水克火、雷克木、✨光⇄🌑暗互克
             </div>
           </div>
         </div>
